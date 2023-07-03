@@ -1,44 +1,32 @@
-# Концептуально не понимаю ТЗ. Как я понял, программа не должна останавливать
-# работу в любом случае, кроме, когда не доступны обязательные токены.
-# А тесты требуют выбрасывать исключения которые останавливают работу
-# программы. В итоге наворотил непойми что, чтобы их пройти
 import logging
+import sys
 import os
 import time
-
-import requests
-import telegram
-from logging import StreamHandler
 from http import HTTPStatus
 
-
+from contextlib import suppress
 from dotenv import load_dotenv
-
-
-class TokensNotAvailable(Exception):
-    """Mandatort token is missing."""
-
-    pass
-
-
-class UnexpectedResponseStatus(Exception):
-    """Mandatort token is missing."""
-
-    pass
+from Exception import TokensNotAvailable
+from Exception import UnexpectedResponseStatus
+import requests
+import telegram
 
 
 load_dotenv()
 
-
-logging.basicConfig(
-    level=logging.DEBUG,
-    filename='hw_bot.log',
-    format='%(asctime)s, %(lineno)d, %(levelname)s, %(message)s, %(funcName)s'
-)
+# Настроил отдельный логгер. Но не очень понимаю куда теперь логи пишутся.
+# Из описания sys.stdout понял что в терминал, но в терминал ничего не приходит
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
-handler = StreamHandler()
+handler = logging.StreamHandler(sys.stdout)
+handler.setLevel(logging.DEBUG)
+formatter = logging.Formatter(
+    '%(asctime)s, %(lineno)d, %(levelname)s, %(message)s, %(funcName)s')
+handler.setFormatter(formatter)
 logger.addHandler(handler)
+
+
+logging.debug('programma start')
 
 PRACTICUM_TOKEN = os.getenv('PRACTICUM_TOKEN')
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
@@ -47,18 +35,6 @@ TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 RETRY_PERIOD = 600
 ENDPOINT = 'https://practicum.yandex.ru/api/user_api/homework_statuses/'
 HEADERS = {'Authorization': f'OAuth {PRACTICUM_TOKEN}'}
-
-test_responce = {'current_date': 1684579682,
-                 'homeworks': [{
-                     'date_updated': '2023-04-23T18:51:30Z',
-                     'homework_name': 'Dragonwlad__hw05_final.zip',
-                     'id': 792402,
-                     'lesson_name': 'Проект спринта: подписки на авторов',
-                     'reviewer_comment': 'Принято!',
-                     'status': 'approved'
-                 }, ]
-                 }
-
 
 HOMEWORK_VERDICTS = {
     'approved': 'Работа проверена: ревьюеру всё понравилось. Ура!',
@@ -69,96 +45,72 @@ HOMEWORK_VERDICTS = {
 
 def check_tokens():
     """Checking access to global tokens."""
-    if not PRACTICUM_TOKEN:
-        logging.critical('PRACTICUM_TOKEN is not available,'
+    tokens = ('PRACTICUM_TOKEN',
+              'TELEGRAM_TOKEN',
+              'TELEGRAM_CHAT_ID',
+              )
+    missing_tokens = [token for token in tokens if globals()[token] is None]
+
+    if missing_tokens:
+        logging.critical(f'{missing_tokens} is not available,'
                          ' programm stoped')
-        raise TokensNotAvailable('PRACTICUM_TOKEN is not available,'
+        raise TokensNotAvailable(f'{missing_tokens} is not available,'
                                  ' programm stoped')
-    if not TELEGRAM_TOKEN:
-        logging.critical('TELEGRAM_TOKEN is not available,'
-                         ' programm stoped')
-        raise TokensNotAvailable('TELEGRAM_TOKEN is not available,'
-                                 ' programm stoped')
-    if not TELEGRAM_CHAT_ID:
-        logging.critical('TELEGRAM_CHAT_ID is not available,'
-                         ' programm stoped')
-        raise TokensNotAvailable('TELEGRAM_CHAT_ID is not available,'
-                                 ' programm stoped')
-    return True
 
 
 def send_message(bot, message):
     """Send message about change status in HW."""
-    try:
-        bot.send_message(TELEGRAM_CHAT_ID, message)
-        logging.debug('HW status change message sent successfully')
-    except Exception as error:
-        logging.error(f'Failed to send message, erorr - {error}')
+    logging.info('try sent message about change status in HW.')
+    bot.send_message(TELEGRAM_CHAT_ID, message)
+    logging.debug('HW status change message sent successfully')
 
 
 def get_api_answer(timestamp):
     """Request to api YP for the status of work."""
+    logging.info('start request to api YP for the status of work')
     payload = {'from_date': timestamp}
     try:
-        homework_statuses = requests.get(ENDPOINT,
-                                         headers=HEADERS,
-                                         params=payload)
-    except AttributeError:
-        logging.error('AttributeError - Unexpected response from the server')
-
-    except Exception as error:
-        message = (f'Responce from YP not received, error -{error}')
-        logging.error(message)
-        return False
-    if homework_statuses.status_code != HTTPStatus.OK:
-        logging.error(f'Unexpected response status code from the server:'
-                      f'{homework_statuses}')
-        raise UnexpectedResponseStatus
-        # return False
+        api_answer = requests.get(ENDPOINT,
+                                  headers=HEADERS,
+                                  params=payload)
+    except requests.RequestException as error:
+        raise ConnectionError(f'Response from YP not received, {error}')
+    if api_answer.status_code != HTTPStatus.OK:
+        raise UnexpectedResponseStatus('Unexpected response status'
+                                       f'code from the server: {api_answer}')
     logging.debug(f'Answer received:'
-                  f'{homework_statuses}')
-    homework_statuses = homework_statuses.json()
-    return homework_statuses
+                  f'{api_answer}')
+    api_answer = api_answer.json()
+    return api_answer
 
 
 def check_response(response):
     """Checking variables from answer YP."""
-    if 'homeworks' not in response or response['homeworks'] is None:
-        logging.error('no key homeworks')
-        raise TypeError()
-
+    logging.info('start check_response ')
     if not isinstance(response, dict):
-        logging.error('uncorrect answer from server')
-        raise TypeError()
-
+        raise TypeError('uncorrect answer from server')
+    if 'homeworks' not in response:
+        raise KeyError('no key homeworks')
     if not isinstance(response['homeworks'], list):
-        logging.error('uncorrect answer from server')
-        raise TypeError()
-    logging.debug(f'Answer {response}')
+        raise TypeError('uncorrect answer from server')
+    logging.debug('check_response done')
     return response['homeworks']
-
-
-def get_key_or_raise(data, key):
-    """Check data from HW status."""
-    if not isinstance(data, dict):
-        logging.error(f'dict expected, received: {type(data)}')
-        raise KeyError(f'dict expected, received: {type(data)}')
-    if key not in data:
-        logging.error(f'{key} not found in {data.keys()}')
-        raise KeyError(f'{key} not found in {data.keys()}')
-    return data[key]
 
 
 def parse_status(homework):
     """Check change HW."""
-    # AssertionError: Убедитесь, что функция `parse_status` выбрасывает
-    # исключение, когда в ответе API домашки нет ключа `homework_name`.
-    # Зачем? Мы же еще в check_response проверили что ключ есть
+    logging.info('start parse_status ')
 
-    homework_name = get_key_or_raise(homework, 'homework_name')
-    status = get_key_or_raise(homework, 'status')
-    verdict = get_key_or_raise(HOMEWORK_VERDICTS, status)
-    return f'Изменился статус проверки работы "{homework_name}". {verdict}'
+    for key in ('homework_name', 'status'):
+        if key not in homework.keys():
+            raise ValueError(f'{key} not found in {homework.keys()}')
+    if homework['status'] not in HOMEWORK_VERDICTS.keys():
+        raise ValueError(f'{homework["status"]} not found'
+                         f'in {HOMEWORK_VERDICTS.keys()}')
+
+    logging.info('parse_status done')
+    return (f'Изменился статус проверки работы "{homework["homework_name"]}".'
+            f' {HOMEWORK_VERDICTS[homework["status"]]}')
 
 
 def main():
@@ -166,27 +118,31 @@ def main():
     check_tokens()
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
     timestamp = int(time.time())
-    logging.debug(timestamp)
-    error_message = None
-    last_status = []
+    logging.debug(f'HW bot started, timestamp = {timestamp}')
+    last_status = None
     while True:
         try:
-            responce = get_api_answer(timestamp)
-            homework = check_response(responce)
-
-            if homework:
-                status = parse_status(homework[0])
-                if status != last_status:
-                    send_message(bot=bot, message=status)
-                    last_status = status
-                    timestamp = int(time.time())
-
+            response = get_api_answer(timestamp)
+            homework = check_response(response)
+            if not homework:
+                logging.info('HW status has not change')
+                continue
+            message = parse_status(homework[0])
+            if message != last_status:
+                send_message(bot=bot, message=message)
+                last_status = message
+                timestamp = response.get('current_date', int(time.time()))
+        except telegram.error.TelegramError as error:
+            message = f'Failed to send message TG : {error}'
+            last_status = message
+            logging.error(message)
         except Exception as error:
-            message = f'Critical error Сбой в работе программы: {error}'
-            logging.critical(message)
-            if error_message == error:
-                bot.send_message(TELEGRAM_CHAT_ID, message)
-            error_message = error
+            message = f'Critical error : {error}'
+            logging.error(message)
+            if message != last_status:
+                with suppress(telegram.error.TelegramError):
+                    send_message(bot=bot, message=message)
+                    last_status = message
         finally:
             time.sleep(RETRY_PERIOD)
 
