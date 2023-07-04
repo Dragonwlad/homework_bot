@@ -23,7 +23,7 @@ handler.setFormatter(formatter)
 logger.addHandler(handler)
 
 
-logger.debug('programma start')
+logger.debug('programm start')
 
 PRACTICUM_TOKEN = os.getenv('PRACTICUM_TOKEN')
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
@@ -123,6 +123,7 @@ def main():
     timestamp = int(time.time())
     logger.debug(f'HW bot started, timestamp = {timestamp}')
     last_status = ''
+
     while True:
         try:
             response = get_api_answer(timestamp)
@@ -139,6 +140,7 @@ def main():
                 logger.info('HW status has not change')
             # получается логируем тут и в 130 строке, как будто
             # что-то из этого избыточно
+
         except telegram.error.TelegramError as error:
             logger.error(f'Failed to send message TG : {error}')
         except Exception as error:
