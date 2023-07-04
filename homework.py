@@ -1,32 +1,29 @@
-import logging
-import sys
-import os
-import time
-from http import HTTPStatus
-
 from contextlib import suppress
+from http import HTTPStatus
+import logging
+import os
+import sys
+import time
+
+
 from dotenv import load_dotenv
-from Exception import TokensNotAvailable
-from Exception import UnexpectedResponseStatus
 import requests
 import telegram
 
+from exception import TokensNotAvailable, UnexpectedResponseStatus
 
 load_dotenv()
 
-# Настроил отдельный логгер. Но не очень понимаю куда теперь логи пишутся.
-# Из описания sys.stdout понял что в терминал, но в терминал ничего не приходит
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 handler = logging.StreamHandler(sys.stdout)
-handler.setLevel(logging.DEBUG)
 formatter = logging.Formatter(
     '%(asctime)s, %(lineno)d, %(levelname)s, %(message)s, %(funcName)s')
 handler.setFormatter(formatter)
 logger.addHandler(handler)
 
 
-logging.debug('programma start')
+logger.debug('programma start')
 
 PRACTICUM_TOKEN = os.getenv('PRACTICUM_TOKEN')
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
@@ -49,68 +46,74 @@ def check_tokens():
               'TELEGRAM_TOKEN',
               'TELEGRAM_CHAT_ID',
               )
-    missing_tokens = [token for token in tokens if globals()[token] is None]
-
+    missing_tokens = []
+    missing_tokens = [token for token in tokens if not globals()[token]]
     if missing_tokens:
-        logging.critical(f'{missing_tokens} is not available,'
-                         ' programm stoped')
-        raise TokensNotAvailable(f'{missing_tokens} is not available,'
-                                 ' programm stoped')
+        message = (f'{",".join(missing_tokens)} is not available,'
+                   'programm stoped')
+        logger.critical(message)
+        raise TokensNotAvailable(message)
+    logger.debug('Global variables are available')
 
 
 def send_message(bot, message):
     """Send message about change status in HW."""
-    logging.info('try sent message about change status in HW.')
+    logger.info('try sent message about change status in HW.')
     bot.send_message(TELEGRAM_CHAT_ID, message)
-    logging.debug('HW status change message sent successfully')
+    logger.debug('message sent successfully')
 
 
 def get_api_answer(timestamp):
     """Request to api YP for the status of work."""
-    logging.info('start request to api YP for the status of work')
+    logger.info('start request to api YP for the status of work')
     payload = {'from_date': timestamp}
     try:
         api_answer = requests.get(ENDPOINT,
                                   headers=HEADERS,
                                   params=payload)
     except requests.RequestException as error:
-        raise ConnectionError(f'Response from YP not received, {error}')
+        raise ConnectionError('Response from YP not received, '
+                              f'{error}') from error
+    # Добавил, но не увидел разницу в терминале что с что без выводит
+    # одинаковые ошибки с ссылкой на 141 строчку
+
     if api_answer.status_code != HTTPStatus.OK:
         raise UnexpectedResponseStatus('Unexpected response status'
-                                       f'code from the server: {api_answer}')
-    logging.debug(f'Answer received:'
-                  f'{api_answer}')
-    api_answer = api_answer.json()
-    return api_answer
+                                       f'code from the server: {api_answer}'
+                                       f', url:{HEADERS}, payload:{payload}')
+    logger.debug(f'Answer received:{api_answer}')
+    return api_answer.json()
 
 
 def check_response(response):
     """Checking variables from answer YP."""
-    logging.info('start check_response ')
+    logger.info('start check_response ')
     if not isinstance(response, dict):
         raise TypeError('uncorrect answer from server')
     if 'homeworks' not in response:
         raise KeyError('no key homeworks')
     if not isinstance(response['homeworks'], list):
         raise TypeError('uncorrect answer from server')
-    logging.debug('check_response done')
+    logger.debug('check_response done')
     return response['homeworks']
 
 
 def parse_status(homework):
     """Check change HW."""
-    logging.info('start parse_status ')
+    logger.info('start parse_status ')
 
     for key in ('homework_name', 'status'):
         if key not in homework.keys():
-            raise ValueError(f'{key} not found in {homework.keys()}')
-    if homework['status'] not in HOMEWORK_VERDICTS.keys():
-        raise ValueError(f'{homework["status"]} not found'
+            raise KeyError(f'{key} not found in {homework.keys()}')
+
+    hw_status = homework['status']
+    if hw_status not in HOMEWORK_VERDICTS.keys():
+        raise ValueError(f'{hw_status} not found'
                          f'in {HOMEWORK_VERDICTS.keys()}')
 
-    logging.info('parse_status done')
+    logger.info('parse_status done')
     return (f'Изменился статус проверки работы "{homework["homework_name"]}".'
-            f' {HOMEWORK_VERDICTS[homework["status"]]}')
+            f' {HOMEWORK_VERDICTS[hw_status]}')
 
 
 def main():
@@ -118,31 +121,33 @@ def main():
     check_tokens()
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
     timestamp = int(time.time())
-    logging.debug(f'HW bot started, timestamp = {timestamp}')
-    last_status = None
+    logger.debug(f'HW bot started, timestamp = {timestamp}')
+    last_status = ''
     while True:
         try:
             response = get_api_answer(timestamp)
             homework = check_response(response)
             if not homework:
-                logging.info('HW status has not change')
+                logger.info('HW status has not change')
                 continue
             message = parse_status(homework[0])
             if message != last_status:
                 send_message(bot=bot, message=message)
                 last_status = message
                 timestamp = response.get('current_date', int(time.time()))
+            else:
+                logger.info('HW status has not change')
+            # получается логируем тут и в 130 строке, как будто
+            # что-то из этого избыточно
         except telegram.error.TelegramError as error:
-            message = f'Failed to send message TG : {error}'
-            last_status = message
-            logging.error(message)
+            logger.error(f'Failed to send message TG : {error}')
         except Exception as error:
             message = f'Critical error : {error}'
-            logging.error(message)
+            logger.error(message)
             if message != last_status:
                 with suppress(telegram.error.TelegramError):
                     send_message(bot=bot, message=message)
-                    last_status = message
+                last_status = message
         finally:
             time.sleep(RETRY_PERIOD)
 
