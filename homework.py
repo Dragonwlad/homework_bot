@@ -1,14 +1,15 @@
-from contextlib import suppress
-from http import HTTPStatus
 import logging
 import os
 import sys
 import time
 
-
-from dotenv import load_dotenv
 import requests
 import telegram
+
+from contextlib import suppress
+from http import HTTPStatus
+
+from dotenv import load_dotenv
 
 from exception import TokensNotAvailable, UnexpectedResponseStatus
 
@@ -44,8 +45,7 @@ def check_tokens():
     """Checking access to global tokens."""
     tokens = ('PRACTICUM_TOKEN',
               'TELEGRAM_TOKEN',
-              'TELEGRAM_CHAT_ID',
-              )
+              'TELEGRAM_CHAT_ID',)
     missing_tokens = []
     missing_tokens = [token for token in tokens if not globals()[token]]
     if missing_tokens:
@@ -74,13 +74,12 @@ def get_api_answer(timestamp):
     except requests.RequestException as error:
         raise ConnectionError('Response from YP not received, '
                               f'{error}') from error
-    # Добавил, но не увидел разницу в терминале что с что без выводит
-    # одинаковые ошибки с ссылкой на 141 строчку
 
     if api_answer.status_code != HTTPStatus.OK:
         raise UnexpectedResponseStatus('Unexpected response status'
                                        f'code from the server: {api_answer}'
-                                       f', url:{HEADERS}, payload:{payload}')
+                                       f', url:{ENDPOINT}, payload:{payload}')
+    # Миссклик, хотел эндпоинт вывести
     logger.debug(f'Answer received:{api_answer}')
     return api_answer.json()
 
@@ -117,7 +116,7 @@ def parse_status(homework):
 
 
 def main():
-    """Основная логика работы бота."""
+    """Main bot logic."""
     check_tokens()
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
     timestamp = int(time.time())
@@ -137,15 +136,13 @@ def main():
                 last_status = message
                 timestamp = response.get('current_date', int(time.time()))
             else:
-                logger.info('HW status has not change')
-            # получается логируем тут и в 130 строке, как будто
-            # что-то из этого избыточно
+                logger.info('HW status repeated')
 
         except telegram.error.TelegramError as error:
             logger.error(f'Failed to send message TG : {error}')
         except Exception as error:
             message = f'Critical error : {error}'
-            logger.error(message)
+            logger.error(message, exc_info=True)
             if message != last_status:
                 with suppress(telegram.error.TelegramError):
                     send_message(bot=bot, message=message)
